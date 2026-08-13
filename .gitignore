@@ -1,0 +1,24 @@
+# Virtual environment
+labelimg_env/
+
+# Model weights (files > 100MB cannot be pushed to GitHub)
+yolo11x.pt
+
+# Large image folders and datasets
+c6_007/
+frames_with_humans_set2/
+PPE_Project/images/
+
+# YOLO runs output folder
+runs/
+
+# CVAT documentation site and automated tests (heavy assets)
+cvat/site/
+cvat/tests/
+
+# Python cache files
+__pycache__/
+*.pyc
+
+# OS-specific files
+.DS_Store

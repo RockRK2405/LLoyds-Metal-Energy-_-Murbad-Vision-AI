@@ -1,0 +1,942 @@
+import os
+import json
+
+# ──────────────── CONFIGURATION ────────────────
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)  # "Lloyds Folder"
+
+# Dataset configurations: each entry defines a dataset to include in the viewer
+DATASET_CONFIGS = [
+    {
+        "id": "set2",
+        "name": "Previous Runs (Set 2)",
+        "image_dir": os.path.join(SCRIPT_DIR, "images"),
+        "label_dir": os.path.join(SCRIPT_DIR, "labels"),
+        "image_base_path": "images/",  # relative path for HTML
+    },
+    {
+        "id": "set3",
+        "name": "Set 3 Detections",
+        "image_dir": os.path.join(PROJECT_ROOT, "frames_with_humans_set3"),
+        "label_dir": os.path.join(SCRIPT_DIR, "labels_set3"),
+        "image_base_path": "../frames_with_humans_set3/",  # relative path for HTML
+    },
+    {
+        "id": "v2",
+        "name": "V2 Pipeline (Multi-Stage)",
+        "image_dir": os.path.join(SCRIPT_DIR, "images"),
+        "label_dir": os.path.join(SCRIPT_DIR, "labels_v2"),
+        "image_base_path": "images/",  # relative path for HTML (same images, different labels)
+    },
+]
+
+JS_DATA_PATH = os.path.join(SCRIPT_DIR, "labels_data.js")
+HTML_PATH = os.path.join(SCRIPT_DIR, "viewer.html")
+
+# ──────────────── SCAN DATASETS ────────────────
+all_datasets = {}
+
+for config in DATASET_CONFIGS:
+    dataset_id = config["id"]
+    image_dir = config["image_dir"]
+    label_dir = config["label_dir"]
+    image_base_path = config["image_base_path"]
+
+    print(f"\nScanning dataset '{config['name']}'...")
+    print(f"  Image dir: {image_dir}")
+    print(f"  Label dir: {label_dir}")
+
+    if not os.path.isdir(image_dir):
+        print(f"  [WARN] Image directory not found, skipping: {image_dir}")
+        continue
+
+    # Find all image files
+    image_files = sorted([
+        f for f in os.listdir(image_dir)
+        if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp'))
+    ])
+
+    labels_data = {}
+    for img_file in image_files:
+        base_name = os.path.splitext(img_file)[0]
+        label_file = base_name + ".txt"
+        label_path = os.path.join(label_dir, label_file)
+
+        annotations = []
+        if os.path.exists(label_path):
+            with open(label_path, "r") as f:
+                lines = [line.strip() for line in f.readlines() if line.strip()]
+            for line in lines:
+                parts = line.split()
+                if len(parts) == 5:
+                    annotations.append({
+                        "class_id": int(parts[0]),
+                        "x_center": float(parts[1]),
+                        "y_center": float(parts[2]),
+                        "width": float(parts[3]),
+                        "height": float(parts[4])
+                    })
+
+        labels_data[img_file] = annotations
+
+    all_datasets[dataset_id] = {
+        "name": config["name"],
+        "image_base_path": image_base_path,
+        "labels": labels_data,
+    }
+    print(f"  Found {len(image_files)} images, {sum(len(v) for v in labels_data.values())} total annotations")
+
+# ──────────────── WRITE JS DATA ────────────────
+print(f"\nWriting JS data to: {JS_DATA_PATH}")
+with open(JS_DATA_PATH, "w") as f:
+    f.write("window.DATASETS_DATA = ")
+    json.dump(all_datasets, f, indent=2)
+    f.write(";\n")
+
+# ──────────────── WRITE VIEWER HTML ────────────────
+print(f"Writing HTML viewer to: {HTML_PATH}")
+
+html_content = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PPE Detection Dataset Viewer</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0b0f19;
+            --card-bg: rgba(17, 24, 39, 0.7);
+            --accent-color: #3b82f6;
+            --accent-hover: #2563eb;
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+            --border-color: rgba(255, 255, 255, 0.08);
+
+            --class-p-color: #10b981; /* Green */
+            --class-n-color: #ef4444; /* Red */
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        header {
+            background-color: rgba(10, 15, 30, 0.8);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border-color);
+            padding: 15px 30px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            z-index: 10;
+        }
+
+        h1 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 20px;
+            font-weight: 600;
+            background: linear-gradient(135deg, #60a5fa, #3b82f6);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .header-stats {
+            font-size: 14px;
+            color: var(--text-muted);
+            background: rgba(255, 255, 255, 0.03);
+            padding: 6px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+        }
+
+        .main-container {
+            display: flex;
+            flex: 1;
+            height: calc(100vh - 70px);
+            overflow: hidden;
+        }
+
+        /* Sidebar config */
+        .sidebar {
+            width: 320px;
+            background-color: rgba(15, 23, 42, 0.5);
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+            gap: 16px;
+        }
+
+        /* Dataset Selector */
+        .dataset-section h3,
+        .filter-section h3 {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+
+        .dataset-select {
+            width: 100%;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border-color);
+            padding: 10px 14px;
+            border-radius: 8px;
+            color: var(--text-main);
+            font-family: inherit;
+            font-size: 14px;
+            transition: all 0.2s;
+            cursor: pointer;
+            appearance: none;
+            -webkit-appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%239ca3af' viewBox='0 0 16 16'%3E%3Cpath d='M7.247 11.14 2.451 5.658C1.885 5.013 2.345 4 3.204 4h9.592a1 1 0 0 1 .753 1.659l-4.796 5.48a1 1 0 0 1-1.506 0z'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+            padding-right: 36px;
+        }
+
+        .dataset-select:focus {
+            outline: none;
+            border-color: var(--accent-color);
+            background-color: rgba(255, 255, 255, 0.08);
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+        }
+
+        .dataset-select option {
+            background: #1e293b;
+            color: var(--text-main);
+        }
+
+        .dataset-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 500;
+            margin-top: 4px;
+        }
+
+        .dataset-indicator.set2 {
+            background: rgba(139, 92, 246, 0.1);
+            color: #a78bfa;
+            border: 1px solid rgba(139, 92, 246, 0.25);
+        }
+
+        .dataset-indicator.set3 {
+            background: rgba(245, 158, 11, 0.1);
+            color: #fbbf24;
+            border: 1px solid rgba(245, 158, 11, 0.25);
+        }
+
+        .dataset-indicator.v2 {
+            background: rgba(16, 185, 129, 0.1);
+            color: #34d399;
+            border: 1px solid rgba(16, 185, 129, 0.25);
+        }
+
+        .dataset-indicator .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .dataset-indicator.set2 .dot {
+            background: #a78bfa;
+        }
+
+        .dataset-indicator.set3 .dot {
+            background: #fbbf24;
+        }
+
+        .dataset-indicator.v2 .dot {
+            background: #34d399;
+        }
+
+        .search-box {
+            position: relative;
+        }
+
+        .search-box input {
+            width: 100%;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border-color);
+            padding: 10px 14px;
+            border-radius: 8px;
+            color: var(--text-main);
+            font-family: inherit;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+
+        .search-box input:focus {
+            outline: none;
+            border-color: var(--accent-color);
+            background: rgba(255, 255, 255, 0.08);
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+        }
+
+        .filter-buttons {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .filter-btn {
+            background: transparent;
+            border: 1px solid transparent;
+            padding: 10px 12px;
+            border-radius: 8px;
+            color: var(--text-muted);
+            text-align: left;
+            font-size: 13px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: all 0.2s;
+        }
+
+        .filter-btn:hover {
+            background: rgba(255, 255, 255, 0.03);
+            color: var(--text-main);
+        }
+
+        .filter-btn.active {
+            background: rgba(59, 130, 246, 0.1);
+            color: #60a5fa;
+            border-color: rgba(59, 130, 246, 0.3);
+            font-weight: 500;
+        }
+
+        .badge {
+            background: rgba(255, 255, 255, 0.08);
+            padding: 2px 6px;
+            border-radius: 6px;
+            font-size: 11px;
+            color: var(--text-main);
+        }
+
+        .image-list-container {
+            flex: 1;
+            overflow-y: auto;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.2);
+        }
+
+        .image-item {
+            padding: 10px 12px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+            font-size: 13px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: all 0.15s;
+        }
+
+        .image-item:hover {
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .image-item.selected {
+            background: rgba(59, 130, 246, 0.15);
+            border-left: 3px solid var(--accent-color);
+            color: #fff;
+        }
+
+        .image-item .item-details {
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+
+        /* Viewport Area */
+        .viewport {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background-color: #080c14;
+            position: relative;
+        }
+
+        .canvas-container {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            padding: 20px;
+            overflow: hidden;
+        }
+
+        canvas {
+            max-width: 100%;
+            max-height: 100%;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            border-radius: 4px;
+            background-color: #111;
+            display: block;
+        }
+
+        /* Controls Panel */
+        .controls-panel {
+            background-color: rgba(10, 15, 30, 0.85);
+            backdrop-filter: blur(12px);
+            border-top: 1px solid var(--border-color);
+            padding: 15px 30px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 20px;
+        }
+
+        .nav-btn {
+            background: var(--accent-color);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-weight: 500;
+            font-size: 14px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.2s;
+        }
+
+        .nav-btn:hover {
+            background: var(--accent-hover);
+        }
+
+        .nav-btn:disabled {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-muted);
+            cursor: not-allowed;
+        }
+
+        .nav-btn-secondary {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-main);
+            border: 1px solid var(--border-color);
+        }
+
+        .nav-btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        .info-card {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border-color);
+            padding: 8px 16px;
+            border-radius: 8px;
+        }
+
+        .info-stat {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .info-stat-label {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+        }
+
+        .info-stat-value {
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .stat-p {
+            color: var(--class-p-color);
+        }
+
+        .stat-n {
+            color: var(--class-n-color);
+        }
+
+        /* Keyboard help */
+        .kbd-tips {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(8px);
+            padding: 8px 14px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            font-size: 11px;
+            color: var(--text-muted);
+            pointer-events: none;
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            z-index: 5;
+        }
+
+        kbd {
+            background: rgba(255, 255, 255, 0.15);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 2px 6px;
+            border-radius: 4px;
+            color: #fff;
+            font-family: monospace;
+            font-size: 10px;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>👷 PPE Detection Dataset Viewer</h1>
+        <div class="header-stats" id="global-stats">Loading stats...</div>
+    </header>
+
+    <div class="main-container">
+        <div class="sidebar">
+            <div class="dataset-section">
+                <h3>Dataset</h3>
+                <select class="dataset-select" id="dataset-select"></select>
+                <div class="dataset-indicator" id="dataset-indicator">
+                    <span class="dot"></span>
+                    <span id="dataset-indicator-text">Loading...</span>
+                </div>
+            </div>
+
+            <div class="search-box">
+                <input type="text" id="search-input" placeholder="Search by image filename...">
+            </div>
+
+            <div class="filter-section">
+                <h3>Filters</h3>
+                <div class="filter-buttons">
+                    <button class="filter-btn active" data-filter="all" id="btn-all">
+                        <span>All Images</span>
+                        <span class="badge" id="badge-all">0</span>
+                    </button>
+                    <button class="filter-btn" data-filter="p" id="btn-p">
+                        <span>With PPE (Class p)</span>
+                        <span class="badge" id="badge-p">0</span>
+                    </button>
+                    <button class="filter-btn" data-filter="n" id="btn-n">
+                        <span>Without PPE (Class n)</span>
+                        <span class="badge" id="badge-n">0</span>
+                    </button>
+                    <button class="filter-btn" data-filter="empty" id="btn-empty">
+                        <span>No Detections</span>
+                        <span class="badge" id="badge-empty">0</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="image-list-container" id="image-list">
+                <!-- Items populated by JS -->
+            </div>
+        </div>
+
+        <div class="viewport">
+            <div class="kbd-tips">
+                <span>Navigate: <kbd>←</kbd> <kbd>→</kbd></span>
+                <span>Zoom/Pan: Bounding boxes auto-scale</span>
+            </div>
+
+            <div class="canvas-container">
+                <canvas id="view-canvas"></canvas>
+            </div>
+
+            <div class="controls-panel">
+                <div style="display: flex; gap: 8px;">
+                    <button class="nav-btn nav-btn-secondary" id="btn-prev">◀ Prev</button>
+                    <button class="nav-btn" id="btn-next">Next ▶</button>
+                </div>
+
+                <div class="info-card">
+                    <div class="info-stat">
+                        <span class="info-stat-label">Current Image</span>
+                        <span class="info-stat-value" id="info-filename">-</span>
+                    </div>
+                    <div class="info-stat">
+                        <span class="info-stat-label">Total Detections</span>
+                        <span class="info-stat-value" id="info-total-det">0</span>
+                    </div>
+                    <div class="info-stat">
+                        <span class="info-stat-label">PPE (Class p)</span>
+                        <span class="info-stat-value stat-p" id="info-p-count">0</span>
+                    </div>
+                    <div class="info-stat">
+                        <span class="info-stat-label">No PPE (Class n)</span>
+                        <span class="info-stat-value stat-n" id="info-n-count">0</span>
+                    </div>
+                </div>
+
+                <div style="font-size: 13px; color: var(--text-muted);">
+                    Index: <span id="info-index" style="color: var(--text-main); font-weight: 600;">0/0</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Load the generated labels data -->
+    <script src="labels_data.js"></script>
+    <script>
+        // Check if data is loaded
+        if (!window.DATASETS_DATA) {
+            alert("Error: window.DATASETS_DATA not found. Please ensure labels_data.js exists and is correctly generated.");
+        }
+
+        const datasetsData = window.DATASETS_DATA;
+        const datasetIds = Object.keys(datasetsData);
+
+        let activeDatasetId = datasetIds[0] || '';
+        let labelsData = {};
+        let imageBasePath = '';
+        let allFilenames = [];
+        let filteredFilenames = [];
+        let currentIndex = 0;
+        let activeFilter = 'all';
+        let searchQuery = '';
+
+        const canvas = document.getElementById('view-canvas');
+        const ctx = canvas.getContext('2d');
+        const currentImg = new Image();
+
+        // Stats elements
+        const badgeAll = document.getElementById('badge-all');
+        const badgeP = document.getElementById('badge-p');
+        const badgeN = document.getElementById('badge-n');
+        const badgeEmpty = document.getElementById('badge-empty');
+        const globalStats = document.getElementById('global-stats');
+
+        // Sidebar elements
+        const imageList = document.getElementById('image-list');
+        const searchInput = document.getElementById('search-input');
+        const filterBtns = document.querySelectorAll('.filter-btn');
+        const datasetSelect = document.getElementById('dataset-select');
+        const datasetIndicator = document.getElementById('dataset-indicator');
+        const datasetIndicatorText = document.getElementById('dataset-indicator-text');
+
+        // Control Panel elements
+        const btnPrev = document.getElementById('btn-prev');
+        const btnNext = document.getElementById('btn-next');
+        const infoFilename = document.getElementById('info-filename');
+        const infoTotalDet = document.getElementById('info-total-det');
+        const infoPCount = document.getElementById('info-p-count');
+        const infoNCount = document.getElementById('info-n-count');
+        const infoIndex = document.getElementById('info-index');
+
+        // Populate dataset selector
+        function populateDatasetSelector() {
+            datasetSelect.innerHTML = '';
+            datasetIds.forEach(id => {
+                const opt = document.createElement('option');
+                opt.value = id;
+                opt.textContent = datasetsData[id].name;
+                datasetSelect.appendChild(opt);
+            });
+            datasetSelect.value = activeDatasetId;
+        }
+
+        // Switch active dataset
+        function switchDataset(datasetId) {
+            activeDatasetId = datasetId;
+            const ds = datasetsData[datasetId];
+            labelsData = ds.labels;
+            imageBasePath = ds.image_base_path;
+            allFilenames = Object.keys(labelsData);
+
+            // Update indicator
+            datasetIndicator.className = 'dataset-indicator ' + datasetId;
+            datasetIndicatorText.textContent = ds.name + ' — ' + allFilenames.length + ' images';
+
+            // Reset state
+            searchQuery = '';
+            searchInput.value = '';
+            activeFilter = 'all';
+            filterBtns.forEach(b => b.classList.remove('active'));
+            document.getElementById('btn-all').classList.add('active');
+
+            calculateStats();
+            applyFilters();
+        }
+
+        // Calculate and display global/badge stats
+        function calculateStats() {
+            let totalP = 0;
+            let totalN = 0;
+            let withP = 0;
+            let withN = 0;
+            let emptyCount = 0;
+
+            allFilenames.forEach(fname => {
+                const anns = labelsData[fname];
+                if (anns.length === 0) {
+                    emptyCount++;
+                } else {
+                    let hasP = false;
+                    let hasN = false;
+                    anns.forEach(ann => {
+                        if (ann.class_id === 0) {
+                            totalP++;
+                            hasP = true;
+                        } else if (ann.class_id === 1) {
+                            totalN++;
+                            hasN = true;
+                        }
+                    });
+                    if (hasP) withP++;
+                    if (hasN) withN++;
+                }
+            });
+
+            badgeAll.innerText = allFilenames.length;
+            badgeP.innerText = withP;
+            badgeN.innerText = withN;
+            badgeEmpty.innerText = emptyCount;
+
+            const dsName = datasetsData[activeDatasetId].name;
+            globalStats.innerText = `${dsName} | Images: ${allFilenames.length} | Detections: ${totalP + totalN} (PPE: ${totalP}, No-PPE: ${totalN})`;
+        }
+
+        // Apply filters and searches
+        function applyFilters() {
+            filteredFilenames = allFilenames.filter(fname => {
+                const anns = labelsData[fname];
+
+                // Apply search filter
+                if (searchQuery && !fname.toLowerCase().includes(searchQuery.toLowerCase())) {
+                    return false;
+                }
+
+                // Apply category filter
+                if (activeFilter === 'all') return true;
+                if (activeFilter === 'empty') return anns.length === 0;
+                if (activeFilter === 'p') return anns.some(ann => ann.class_id === 0);
+                if (activeFilter === 'n') return anns.some(ann => ann.class_id === 1);
+
+                return true;
+            });
+
+            currentIndex = 0;
+            populateImageList();
+            if (filteredFilenames.length > 0) {
+                loadImage(filteredFilenames[0]);
+            } else {
+                clearCanvas();
+            }
+            updateControls();
+        }
+
+        // Populate sidebar image list
+        function populateImageList() {
+            imageList.innerHTML = '';
+            filteredFilenames.forEach((fname, index) => {
+                const item = document.createElement('div');
+                item.className = 'image-item' + (index === currentIndex ? ' selected' : '');
+
+                const anns = labelsData[fname];
+                const pCount = anns.filter(a => a.class_id === 0).length;
+                const nCount = anns.filter(a => a.class_id === 1).length;
+
+                item.innerHTML = `
+                    <div>
+                        <div style="font-weight: 500;">${fname}</div>
+                        <div class="item-details">Index: ${index + 1}</div>
+                    </div>
+                    <div>
+                        ${pCount > 0 ? `<span style="background: rgba(16, 185, 129, 0.2); color: var(--class-p-color); padding: 1px 4px; border-radius: 4px; font-size: 10px; margin-right: 4px;">p:${pCount}</span>` : ''}
+                        ${nCount > 0 ? `<span style="background: rgba(239, 68, 68, 0.2); color: var(--class-n-color); padding: 1px 4px; border-radius: 4px; font-size: 10px;">n:${nCount}</span>` : ''}
+                        ${anns.length === 0 ? `<span style="color: var(--text-muted); font-size: 10px;">empty</span>` : ''}
+                    </div>
+                `;
+
+                item.addEventListener('click', () => {
+                    selectIndex(index);
+                });
+
+                imageList.appendChild(item);
+            });
+        }
+
+        // Load and draw image
+        function loadImage(fname) {
+            currentImg.src = imageBasePath + fname;
+            currentImg.onload = function() {
+                drawCanvas();
+            };
+
+            // Update sidebar selection styling
+            const items = imageList.children;
+            for (let i = 0; i < items.length; i++) {
+                if (i === currentIndex) {
+                    items[i].classList.add('selected');
+                    items[i].scrollIntoView({ block: 'nearest' });
+                } else {
+                    items[i].classList.remove('selected');
+                }
+            }
+
+            // Update info card
+            const anns = labelsData[fname];
+            const pCount = anns.filter(a => a.class_id === 0).length;
+            const nCount = anns.filter(a => a.class_id === 1).length;
+
+            infoFilename.innerText = fname;
+            infoTotalDet.innerText = anns.length;
+            infoPCount.innerText = pCount;
+            infoNCount.innerText = nCount;
+            infoIndex.innerText = `${currentIndex + 1}/${filteredFilenames.length}`;
+        }
+
+        function drawCanvas() {
+            if (!currentImg.src) return;
+
+            // Set canvas resolution to match image size
+            canvas.width = currentImg.naturalWidth;
+            canvas.height = currentImg.naturalHeight;
+
+            // Draw base image
+            ctx.drawImage(currentImg, 0, 0);
+
+            // Draw bounding boxes
+            const fname = filteredFilenames[currentIndex];
+            const anns = labelsData[fname] || [];
+
+            anns.forEach(ann => {
+                const w = ann.width * canvas.width;
+                const h = ann.height * canvas.height;
+                const x = (ann.x_center * canvas.width) - (w / 2);
+                const y = (ann.y_center * canvas.height) - (h / 2);
+
+                const color = ann.class_id === 0 ? '#10b981' : '#ef4444';
+                const label = ann.class_id === 0 ? 'p (PPE)' : 'n (No PPE)';
+
+                // Draw bounding box rectangle
+                ctx.strokeStyle = color;
+                ctx.lineWidth = Math.max(2, Math.round(canvas.width / 400));
+                ctx.strokeRect(x, y, w, h);
+
+                // Draw label background
+                ctx.fillStyle = color;
+                const fontSize = Math.max(12, Math.round(canvas.width / 60));
+                ctx.font = `600 ${fontSize}px Inter, sans-serif`;
+
+                const textWidth = ctx.measureText(label).width;
+                const padding = 6;
+                ctx.fillRect(x, y - fontSize - padding, textWidth + padding * 2, fontSize + padding);
+
+                // Draw label text
+                ctx.fillStyle = '#000000';
+                ctx.fillText(label, x + padding, y - padding);
+            });
+        }
+
+        function clearCanvas() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            infoFilename.innerText = 'No image selected';
+            infoTotalDet.innerText = '0';
+            infoPCount.innerText = '0';
+            infoNCount.innerText = '0';
+            infoIndex.innerText = '0/0';
+        }
+
+        function selectIndex(index) {
+            if (index >= 0 && index < filteredFilenames.length) {
+                currentIndex = index;
+                loadImage(filteredFilenames[currentIndex]);
+                updateControls();
+            }
+        }
+
+        function updateControls() {
+            btnPrev.disabled = currentIndex === 0;
+            btnNext.disabled = currentIndex >= filteredFilenames.length - 1;
+        }
+
+        // Event listeners
+        btnPrev.addEventListener('click', () => {
+            if (currentIndex > 0) selectIndex(currentIndex - 1);
+        });
+
+        btnNext.addEventListener('click', () => {
+            if (currentIndex < filteredFilenames.length - 1) selectIndex(currentIndex + 1);
+        });
+
+        // Filter button listeners
+        filterBtns.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                filterBtns.forEach(b => b.classList.remove('active'));
+                const target = e.currentTarget;
+                target.classList.add('active');
+                activeFilter = target.dataset.filter;
+                applyFilters();
+            });
+        });
+
+        // Search listener
+        searchInput.addEventListener('input', (e) => {
+            searchQuery = e.target.value;
+            applyFilters();
+        });
+
+        // Dataset selector listener
+        datasetSelect.addEventListener('change', (e) => {
+            switchDataset(e.target.value);
+        });
+
+        // Keyboard navigation
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowLeft') {
+                if (currentIndex > 0) selectIndex(currentIndex - 1);
+            } else if (e.key === 'ArrowRight') {
+                if (currentIndex < filteredFilenames.length - 1) selectIndex(currentIndex + 1);
+            }
+        });
+
+        // Handle canvas resize automatically
+        window.addEventListener('resize', () => {
+            drawCanvas();
+        });
+
+        // Initial setup
+        populateDatasetSelector();
+        switchDataset(activeDatasetId);
+
+    </script>
+</body>
+</html>
+"""
+
+with open(HTML_PATH, "w") as f:
+    f.write(html_content)
+
+print("\nViewer setup complete! Open the following file in your browser to view all images and annotations:")
+print(f"👉 file://{HTML_PATH}")
